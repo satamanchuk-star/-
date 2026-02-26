@@ -87,12 +87,11 @@ async def run_moderation(
             if strikes == 0:
                 # First offence → mute 24 h
                 from datetime import timedelta
-                until = None  # aiogram uses until_date; None = permanent in some bots
                 await bot.restrict_chat_member(
                     forum_chat_id,
                     user_id,
                     permissions=_no_permissions(),
-                    until_date=86400,  # 24 hours in seconds
+                    until_date=timedelta(hours=24),
                 )
                 await bot.send_message(
                     forum_chat_id,
