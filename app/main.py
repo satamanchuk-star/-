@@ -50,4 +50,10 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    if not settings.bot_token:
+        logger.critical(
+            "BOT_TOKEN is not set. "
+            "Copy .env.example to .env and fill in your Telegram bot token."
+        )
+        raise SystemExit(1)
     asyncio.run(main())
