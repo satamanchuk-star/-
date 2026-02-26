@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 
+from datetime import timedelta
+
 from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -13,23 +15,6 @@ from app.utils.admin import invalidate_admin_cache, is_admin
 
 router = Router(name="moderation")
 logger = logging.getLogger(__name__)
-
-
-@router.message()
-async def moderate_incoming(message: Message, bot: Bot) -> None:
-    """Auto-moderate every incoming message in the forum chat."""
-    if message.chat.id != settings.forum_chat_id:
-        return
-
-    user_id = message.from_user.id if message.from_user else 0
-    if not user_id:
-        return
-
-    # Skip moderation for admins
-    if await is_admin(bot, settings.forum_chat_id, user_id):
-        return
-
-    await run_moderation(message, bot, settings.forum_chat_id)
 
 
 @router.message(Command("mute"))
@@ -45,10 +30,10 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
         settings.forum_chat_id,
         target_id,
         permissions=_silent_permissions(),
-        until_date=3600,
+        until_date=timedelta(hours=1),
     )
     invalidate_admin_cache(settings.forum_chat_id, target_id)
-    await message.reply(f"🔇 Пользователь заглушён на 1 час.")
+    await message.reply("🔇 Пользователь заглушён на 1 час.")
 
 
 @router.message(Command("ban"))
@@ -77,6 +62,23 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
     await bot.unban_chat_member(settings.forum_chat_id, target_id, only_if_banned=True)
     invalidate_admin_cache(settings.forum_chat_id, target_id)
     await message.reply("✅ Пользователь разбанен.")
+
+
+@router.message()
+async def moderate_incoming(message: Message, bot: Bot) -> None:
+    """Auto-moderate every incoming message in the forum chat."""
+    if message.chat.id != settings.forum_chat_id:
+        return
+
+    user_id = message.from_user.id if message.from_user else 0
+    if not user_id:
+        return
+
+    # Skip moderation for admins
+    if await is_admin(bot, settings.forum_chat_id, user_id):
+        return
+
+    await run_moderation(message, bot, settings.forum_chat_id)
 
 
 def _silent_permissions():

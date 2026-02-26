@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from aiogram import Bot, F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command
 from aiogram.types import Message
 
@@ -198,18 +199,18 @@ async def cmd_reset_used(message: Message, bot: Bot) -> None:
 async def handle_quiz_answer(message: Message, bot: Bot) -> None:
     """Process a possible quiz answer from any user in the games topic."""
     if message.chat.id != settings.forum_chat_id:
-        return
+        raise SkipHandler
     if not message.text or not message.from_user:
-        return
+        raise SkipHandler
 
     topic_id = message.message_thread_id or settings.topic_games
     if topic_id != settings.topic_games:
-        return  # Only in games topic
+        raise SkipHandler  # Only in games topic
 
     async for session in get_session():
         quiz_session = await get_active_session(session, settings.forum_chat_id, topic_id)
         if not quiz_session or not quiz_session.current_question_id:
-            return
+            raise SkipHandler
 
         # Fetch current question
         from sqlalchemy import select

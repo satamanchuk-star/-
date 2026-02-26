@@ -13,6 +13,7 @@ import re
 from typing import TYPE_CHECKING
 
 from aiogram import Bot, F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command
 from aiogram.types import Message
 
@@ -78,11 +79,11 @@ async def cmd_help(message: Message) -> None:
 async def handle_mention(message: Message, bot: Bot) -> None:
     """Respond when the bot is mentioned by name in a message."""
     if not message.text:
-        return
+        raise SkipHandler
 
     # Only respond in the forum
     if message.chat.id != settings.forum_chat_id:
-        return
+        raise SkipHandler
 
     bot_info = await bot.get_me()
     names = _BOT_NAMES.copy()
@@ -90,7 +91,7 @@ async def handle_mention(message: Message, bot: Bot) -> None:
         names.append(bot_info.username.lower())
 
     if not _is_bot_name_called(message.text, names):
-        return
+        raise SkipHandler
 
     # Strip the bot name from the prompt
     prompt = message.text
