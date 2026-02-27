@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,7 +14,11 @@ class Settings(BaseSettings):
     )
 
     # Telegram
-    bot_token: str = Field(default="", alias="BOT_TOKEN")
+    # Accepts BOT_TOKEN (preferred) or DOCKERHUB_TOKEN (legacy secret name)
+    bot_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("BOT_TOKEN", "DOCKERHUB_TOKEN"),
+    )
     forum_chat_id: int = Field(default=0, alias="FORUM_CHAT_ID")
     topic_rules: int = Field(default=1, alias="TOPIC_RULES")
     topic_games: int = Field(default=2, alias="TOPIC_GAMES")
