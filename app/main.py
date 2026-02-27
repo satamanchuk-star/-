@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
+    if not settings.bot_token:
+        raise SystemExit(
+            "FATAL: Bot token is not set. "
+            "Provide BOT_TOKEN or DOCKERHUB_TOKEN environment variable."
+        )
+
     await init_db()
 
     bot = Bot(
