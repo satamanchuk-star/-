@@ -291,7 +291,7 @@ def _is_bot_name_called(text: str, bot_names: list[str]) -> bool:
 # ---------------------------------------------------------------------------
 
 _MODERATION_SYSTEM_PROMPT = """\
-Ты — AI-модератор чата жилого комплекса (ЖК). Участники — соседи, общение преимущественно на русском языке.
+Ты — AI-модератор чата жилого комплекса (ЖК). Участники — соседи, общение неформальное.
 
 Твоя задача: проанализировать сообщение и вернуть JSON-объект со следующими полями:
 - violation_type: строка ("profanity" | "aggression" | "spam" | "forbidden_link" | "offtopic" | "none")
@@ -299,26 +299,27 @@ _MODERATION_SYSTEM_PROMPT = """\
 - confidence: число от 0.0 до 1.0
 - action: строка ("none" | "warn" | "delete" | "mute_1h" | "mute_24h" | "ban")
 
-Правила определения severity:
-- 0: нет нарушения, технический вопрос, жалоба без агрессии
-- 1: лёгкое нарушение — грубость без мата, офтоп
-- 2: среднее — мат без агрессии, ссылки не по теме
-- 3: тяжёлое — угрозы, мат с агрессией, спам, доксинг
+ГЛАВНОЕ ПРАВИЛО: анализируй КОНТЕКСТ и НАМЕРЕНИЕ сообщения, а не отдельные слова.
+Матерные и грубые слова в дружеском или нейтральном контексте — НЕ нарушение.
+Например: «блин, опять лифт сломался» или «ну нифига себе цены» — это severity 0.
+Лёгкая грубость в бытовом общении между соседями — НЕ повод для наказания.
 
-Правила действий:
-- severity 0 → action: "none"
-- severity 1 → action: "warn"
-- severity 2 → action: "delete" (или "warn" если сомневаешься)
-- severity 3 → action: "mute_24h" (первый раз), "ban" (повторно)
+Удаление и бан ТОЛЬКО за:
+- Прямые оскорбления конкретного человека с агрессией (severity 3)
+- Угрозы физической расправой (severity 3)
+- Доксинг — публикация чужих персональных данных (severity 3)
+- Целенаправленная травля или буллинг (severity 3)
+- Спам и реклама (severity 2)
 
-Примеры замаскированного мата (считается нарушением severity 3):
-- "x*й", "х*й", "xуй", "хуй", "хуй", "blyad", "пи3да", "п*зда" → мат
-- "bl***", "п***ц", "е*ать" → мат
+НЕ наказывай за:
+- Мат без агрессии и без адресата (бытовой мат): severity 0
+- Эмоциональные высказывания без оскорблений конкретных людей: severity 0
+- Жалобы на соседей, УК, сервисы (даже в грубой форме): severity 0
+- Сарказм и ирония: severity 0
+- Грубоватый юмор: severity 0
 
-Слова-исключения (НЕ мат):
-- "хлеб", "тебя", "небо", "сукно", "бляха-муха", "рыбак", "грибы"
-
-Контекст ЖК: жалобы на соседей, вопросы про шлагбаум, правила, управляющую компанию — это нормальные сообщения (severity 0 или 1 без агрессии).
+При ЛЮБОМ сомнении — severity 0 (не наказывать).
+Лучше пропустить 10 грубых сообщений, чем наказать 1 невиновного.
 
 Верни ТОЛЬКО JSON без дополнительного текста.
 """
@@ -342,6 +343,10 @@ _ASSISTANT_SYSTEM_PROMPT = """\
 - Жалобы на соседей в контексте ЖК — отвечай, это твоя задача
 - Если вопрос касается нарушений правил ЖК соседями — помогай найти решение
 - НЕ обсуждай политику, религию, финансовые инвестиции
+
+ВАЖНО: если в контексте есть раздел «База знаний ЖК», используй информацию
+из него как основной источник для ответов. Эти сообщения — проверенный контекст
+от жителей и администраторов ЖК.
 
 Стиль: дружелюбный, иногда с лёгким юмором, всегда по делу.
 """
@@ -456,17 +461,20 @@ class OpenRouterProvider:
         if not self._api_key:
             return build_local_assistant_reply(safe_prompt)
 
-        # 5. Build system prompt, optionally injecting RAG context
+        # 5. Build system prompt, injecting RAG context from both sources
         system = _ASSISTANT_SYSTEM_PROMPT
-        if settings.ai_feature_rag:
-            try:
-                from app.services.rag import search_rag, format_rag_context
-                rag_results = search_rag(safe_prompt, top_k=3)
-                rag_text = format_rag_context(rag_results)
+        try:
+            from app.services.rag import get_combined_rag_context
+            from app.models.base import get_session
+            async for session in get_session():
+                rag_text = await get_combined_rag_context(
+                    session, chat_id or settings.forum_chat_id, safe_prompt, top_k=5
+                )
                 if rag_text:
                     system += f"\n\nБаза знаний ЖК:\n{rag_text}"
-            except Exception as exc:
-                logger.warning("RAG search failed: %s", exc)
+                break
+        except Exception as exc:
+            logger.warning("RAG search failed: %s", exc)
 
         # 6. Call LLM
         messages: list[dict[str, str]] = [{"role": "system", "content": system}]
@@ -498,15 +506,73 @@ def build_local_assistant_reply(prompt: str) -> str:
     return "Напиши вопрос подробнее — постараюсь помочь! 😊"
 
 
+def _has_aggressive_target(text: str) -> bool:
+    """Проверяет, направлена ли грубость на конкретного человека."""
+    lowered = text.lower()
+    target_markers = ("ты ", "тебя ", "тебе ", "вы ", "вас ", "вам ", "@")
+    return any(marker in lowered for marker in target_markers)
+
+
+_THREAT_PATTERNS = ("убью", "убить", "сдохни", "уничтож", "калечить")
+_AGGRESSIVE_INSULTS = ("идиот", "дебил", "даун", "мразь", "тварь", "ублюд")
+
+
 def _local_moderation_fallback(text: str) -> dict[str, Any]:
-    """Rule-based moderation used when the API is unavailable."""
-    if detect_profanity(text):
+    """Rule-based moderation used when the API is unavailable.
+
+    Модерирует по контексту: бытовой мат без агрессии НЕ наказывается.
+    """
+    lowered = text.lower()
+
+    # Угрозы — всегда severity 3
+    if any(p in lowered for p in _THREAT_PATTERNS):
         return {
-            "violation_type": "profanity",
+            "violation_type": "aggression",
+            "severity": 3,
+            "confidence": 0.9,
+            "action": "mute_24h",
+        }
+
+    has_profanity = detect_profanity(text)
+    has_insult = any(p in lowered for p in _AGGRESSIVE_INSULTS)
+    has_target = _has_aggressive_target(text)
+
+    # Мат + оскорбление + адресат — severity 3
+    if has_profanity and has_insult and has_target:
+        return {
+            "violation_type": "aggression",
             "severity": 3,
             "confidence": 0.85,
+            "action": "mute_24h",
+        }
+
+    # Мат направленный на человека — severity 2
+    if has_profanity and has_target:
+        return {
+            "violation_type": "profanity",
+            "severity": 2,
+            "confidence": 0.7,
             "action": "delete",
         }
+
+    # Бытовой мат без адресата — НЕ наказываем
+    if has_profanity:
+        return {
+            "violation_type": "none",
+            "severity": 0,
+            "confidence": 0.6,
+            "action": "none",
+        }
+
+    # Оскорбление без мата, но с адресатом — warn
+    if has_insult and has_target:
+        return {
+            "violation_type": "rude",
+            "severity": 1,
+            "confidence": 0.7,
+            "action": "warn",
+        }
+
     return {
         "violation_type": "none",
         "severity": 0,

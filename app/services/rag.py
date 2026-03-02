@@ -1,24 +1,25 @@
-"""Simple JSON-based RAG (Retrieval-Augmented Generation) module.
+"""RAG (Retrieval-Augmented Generation) module.
 
-Task 8: Provides a lightweight knowledge base for the ЖК assistant without
-requiring ChromaDB or FAISS. Uses keyword overlap for retrieval.
+Provides knowledge base for the ЖК assistant using two sources:
+1. JSON file (app/data/rag_knowledge.json) — static knowledge
+2. Database (rag_messages table) — messages added by admins via /rag_bot
 
-Architecture:
-- Knowledge stored in app/data/rag_knowledge.json
-- Loaded fresh on each search (file is small, ≤ a few hundred KB)
-- Updated via /updaterag (admin command) which fetches pinned messages from
-  the forum chat
-- search_rag() uses TF-IDF-style word overlap to rank fragments
+Both sources are searched and combined for assistant context.
 """
 from __future__ import annotations
 
 import json
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import settings
+from app.models.rag import RagMessage
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -171,3 +172,104 @@ def _extract_keywords(text: str) -> list[str]:
             seen.add(t)
             result.append(t)
     return result[:30]
+
+
+# ---------------------------------------------------------------------------
+# Database-backed RAG (admin-added messages via /rag_bot)
+# ---------------------------------------------------------------------------
+
+async def add_rag_message(
+    session: AsyncSession,
+    *,
+    chat_id: int,
+    message_text: str,
+    added_by_user_id: int,
+    source_user_id: int | None = None,
+    source_message_id: int | None = None,
+) -> RagMessage:
+    """Добавляет сообщение в RAG-базу знаний."""
+    record = RagMessage(
+        chat_id=chat_id,
+        message_text=message_text,
+        added_by_user_id=added_by_user_id,
+        source_user_id=source_user_id,
+        source_message_id=source_message_id,
+    )
+    session.add(record)
+    await session.flush()
+    return record
+
+
+async def search_rag_db(
+    session: AsyncSession,
+    chat_id: int,
+    query: str,
+    top_k: int = 5,
+) -> list[RagMessage]:
+    """Ищет релевантные сообщения из RAG-базы по пересечению слов."""
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return []
+
+    result = await session.execute(
+        select(RagMessage)
+        .where(RagMessage.chat_id == chat_id)
+        .order_by(RagMessage.created_at.desc())
+        .limit(200)
+    )
+    messages = list(result.scalars().all())
+
+    scored: list[tuple[RagMessage, float]] = []
+    for msg in messages:
+        msg_tokens = _tokenize(msg.message_text)
+        if not msg_tokens:
+            continue
+        overlap = len(query_tokens & msg_tokens)
+        if overlap > 0:
+            score = overlap / len(query_tokens)
+            scored.append((msg, score))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [msg for msg, _ in scored[:top_k]]
+
+
+def format_db_rag_context(messages: list[RagMessage]) -> str:
+    """Форматирует DB-RAG сообщения для вставки в промпт."""
+    if not messages:
+        return ""
+    parts = []
+    for i, msg in enumerate(messages, 1):
+        parts.append(f"[{i}] {msg.message_text}")
+    return "\n".join(parts)
+
+
+async def get_combined_rag_context(
+    session: AsyncSession,
+    chat_id: int,
+    query: str,
+    top_k: int = 5,
+) -> str:
+    """Объединяет контекст из JSON-файла и базы данных."""
+    parts = []
+
+    # JSON-based RAG
+    json_results = search_rag(query, top_k=top_k)
+    json_text = format_rag_context(json_results)
+    if json_text:
+        parts.append(json_text)
+
+    # DB-based RAG (admin-added messages)
+    db_results = await search_rag_db(session, chat_id, query, top_k=top_k)
+    db_text = format_db_rag_context(db_results)
+    if db_text:
+        parts.append(db_text)
+
+    return "\n".join(parts)
+
+
+async def get_rag_count(session: AsyncSession, chat_id: int) -> int:
+    """Возвращает количество записей в RAG-базе."""
+    result = await session.scalar(
+        select(func.count()).select_from(RagMessage).where(RagMessage.chat_id == chat_id)
+    )
+    return int(result or 0)
