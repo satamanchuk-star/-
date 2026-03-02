@@ -127,3 +127,51 @@ async def cmd_update_rag(message: Message, bot: Bot) -> None:
     from app.services.rag import load_rag_from_telegram
     count = await load_rag_from_telegram(bot)
     await message.reply(f"✅ RAG обновлён: {count} фрагментов загружено.")
+
+
+@router.message(Command("rag_bot"))
+async def cmd_rag_bot(message: Message, bot: Bot) -> None:
+    """Добавляет сообщение (реплай) в RAG-базу знаний бота."""
+    if not message.from_user or not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+        return
+
+    if message.reply_to_message is None:
+        await message.reply(
+            "Используйте /rag_bot как реплай на сообщение, "
+            "которое хотите добавить в базу знаний бота."
+        )
+        return
+
+    target_msg = message.reply_to_message
+    text = target_msg.text or target_msg.caption
+    if not text or len(text.strip()) < 10:
+        await message.reply("Сообщение слишком короткое или пустое для базы знаний.")
+        return
+
+    from app.models.base import get_session
+    from app.services.rag import add_rag_message, get_rag_count
+
+    admin_id = message.from_user.id
+    source_user_id = target_msg.from_user.id if target_msg.from_user else None
+
+    async for session in get_session():
+        await add_rag_message(
+            session,
+            chat_id=settings.forum_chat_id,
+            message_text=text.strip(),
+            added_by_user_id=admin_id,
+            source_user_id=source_user_id,
+            source_message_id=target_msg.message_id,
+        )
+        await session.commit()
+        count = await get_rag_count(session, settings.forum_chat_id)
+
+    await message.reply(
+        f"✅ Сообщение добавлено в базу знаний бота.\n"
+        f"Всего записей в базе: {count}"
+    )
+    logger.info(
+        "RAG: админ %s добавил сообщение %s в базу знаний",
+        admin_id,
+        target_msg.message_id,
+    )

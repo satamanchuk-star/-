@@ -42,19 +42,19 @@ async def run_moderation(
     user_id = message.from_user.id if message.from_user else 0
 
     # --- Fast local checks ---
-    has_profanity = detect_profanity(text)
     has_bad_link = contains_forbidden_link(text, forum_chat_id)
 
     # --- AI verdict ---
     verdict: dict[str, Any] = {}
-    if has_profanity or has_bad_link:
+    if has_bad_link:
         verdict = {
-            "violation_type": "profanity" if has_profanity else "forbidden_link",
-            "severity": 3 if has_profanity else 2,
+            "violation_type": "forbidden_link",
+            "severity": 2,
             "confidence": 0.9,
             "action": "delete",
         }
     else:
+        # AI модерация анализирует контекст, не только отдельные слова
         try:
             verdict = await _ai.moderate_message(text, chat_id=forum_chat_id)
         except Exception as exc:
