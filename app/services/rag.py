@@ -65,14 +65,58 @@ def _tokenize(text: str) -> set[str]:
     return {w for w in re.findall(r"[а-яёa-z]+", text.lower()) if len(w) >= 3}
 
 
+# ---------------------------------------------------------------------------
+# Synonym map: maps common user phrasing to canonical terms used in the
+# knowledge base. This dramatically improves recall for short/colloquial
+# queries without requiring an embedding model.
+# ---------------------------------------------------------------------------
+_SYNONYMS: dict[str, list[str]] = {
+    "шлагбаум": ["ворота", "въезд", "выезд", "барьер", "пропуск", "заехать", "проехать", "открыть"],
+    "парковка": ["машина", "авто", "автомобиль", "стоянка", "место", "припарковать", "запарковать"],
+    "мусор": ["отходы", "вывоз", "контейнер", "помойка", "бак", "урна", "мусорка"],
+    "домофон": ["ключ", "дверь", "замок", "открыть", "звонок", "подъезд"],
+    "лифт": ["подъёмник", "застрял", "этаж", "грузовой"],
+    "шум": ["тишина", "громко", "музыка", "сверлят", "стучат", "перфоратор", "ремонт"],
+    "собака": ["кошка", "животное", "питомец", "выгул", "лай", "поводок"],
+    "охрана": ["безопасность", "консьерж", "камера", "видеонаблюдение", "пост"],
+    "площадка": ["детская", "качели", "горка", "песочница", "дети"],
+    "управляющая": ["компания", "заявка", "жалоба", "авария"],
+    "курьер": ["доставка", "посылка", "постамат", "почта", "заказ"],
+    "правила": ["правило", "разрешено", "запрещено", "можно", "нельзя"],
+    "ремонт": ["перепланировка", "стройка", "строительный"],
+}
+
+
+def _expand_with_synonyms(tokens: set[str]) -> set[str]:
+    """Expand a set of tokens by adding synonyms from the synonym map."""
+    expanded = set(tokens)
+    for token in tokens:
+        # Check if token is a key in synonyms
+        for canonical, syns in _SYNONYMS.items():
+            if token == canonical or token in syns:
+                expanded.add(canonical)
+                expanded.update(syns)
+            # Partial stem matching (e.g. "шлагбаум" matches "шлагбаум*")
+            elif len(token) >= 4 and (canonical.startswith(token) or token.startswith(canonical)):
+                expanded.add(canonical)
+                expanded.update(syns)
+    return expanded
+
+
 def _score(query_tokens: set[str], entry: RagEntry) -> float:
-    """Compute overlap score between query tokens and entry keywords + text."""
+    """Compute overlap score between query tokens and entry keywords + text.
+
+    Uses synonym expansion on the query side to improve recall for
+    colloquial/short questions.
+    """
+    expanded_query = _expand_with_synonyms(query_tokens)
     entry_tokens = _tokenize(entry.get("text", ""))
     for kw in entry.get("keywords", []):
         entry_tokens.update(_tokenize(kw))
     if not entry_tokens:
         return 0.0
-    intersection = query_tokens & entry_tokens
+    intersection = expanded_query & entry_tokens
+    # Normalize by original query size to keep scoring fair
     return len(intersection) / len(query_tokens) if query_tokens else 0.0
 
 
