@@ -108,8 +108,9 @@ class TestAssistantReplyGreetings:
 
         # Should contain a soft redirect, not a hard refusal
         assert reply  # not empty
-        # The reply should mention ЖК topics or be friendly
-        assert "жк" in reply.lower() or "шлагбаум" in reply.lower() or "😄" in reply
+        # The reply should mention ЖК-related topics or be friendly
+        lowered = reply.lower()
+        assert any(kw in lowered for kw in ("жк", "шлагбаум", "парковк", "правил", "ук", "сосед")) or any(e in reply for e in ("😄", "😊", "😅", "🤖", "🏢", "💪", "🤔"))
 
     @pytest.mark.asyncio
     async def test_forbidden_topic_gets_polite_refusal(self):

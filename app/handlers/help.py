@@ -104,9 +104,16 @@ async def handle_mention(message: Message, bot: Bot) -> None:
         )
     prompt = prompt.strip(" ,!?")
 
+    # Extract display name for personalized replies
+    user = message.from_user
+    display_name = None
+    if user:
+        display_name = user.first_name or user.username
+
     reply = await _ai.assistant_reply(
         prompt or "привет",
         chat_id=message.chat.id,
+        username=display_name,
     )
     await message.reply(reply)
 
