@@ -55,6 +55,9 @@ async def _send_question(
 ) -> None:
     """Fetch next question, send it, and start timeout timer."""
     async for session in get_session():
+        # Re-attach the detached quiz_session to this DB session so that
+        # changes (current_question_id, questions_asked, etc.) are persisted.
+        quiz_session = await session.merge(quiz_session)
         used_ids = quiz_session.get_used_ids()
         question = await get_next_question(session, chat_id, used_ids)
         if question is None:
