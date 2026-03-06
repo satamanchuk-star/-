@@ -1,8 +1,57 @@
 from __future__ import annotations
 
 import os
+import re
+from pathlib import Path
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# ---------------------------------------------------------------------------
+# Load environment variables from the server's docker-compose.yaml
+# ---------------------------------------------------------------------------
+_COMPOSE_FILE = Path("/opt/alexbot/docker-compose.yaml")
+
+
+def _parse_env_from_compose(path: Path) -> dict[str, str]:
+    """Extract environment variables from docker-compose.yaml."""
+    if not path.exists():
+        return {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return {}
+
+    env_vars: dict[str, str] = {}
+    in_environment = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "environment:":
+            in_environment = True
+            continue
+        if in_environment:
+            if not stripped or stripped.startswith("#"):
+                continue
+            # "- KEY=VALUE" format
+            m = re.match(r"^-\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$", stripped)
+            if m:
+                env_vars[m.group(1)] = m.group(2).strip().strip("'\"")
+                continue
+            # "KEY: VALUE" format
+            m = re.match(r"^([A-Z_][A-Z0-9_]*)\s*:\s*(.+)$", stripped)
+            if m:
+                env_vars[m.group(1)] = m.group(2).strip().strip("'\"")
+                continue
+            # Any other non-indented/non-env line ends the section
+            if not stripped.startswith("-") and "=" not in stripped:
+                in_environment = False
+    return env_vars
+
+
+_compose_env = _parse_env_from_compose(_COMPOSE_FILE)
+for _k, _v in _compose_env.items():
+    if _k not in os.environ:
+        os.environ[_k] = _v
 
 
 class Settings(BaseSettings):
