@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -22,18 +23,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Telegram bot token format: <digits>:<alphanumeric+special>
+_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]+$")
+
 
 async def main() -> None:
-    if not settings.bot_token:
+    token = settings.bot_token
+    if not token:
         raise SystemExit(
             "FATAL: Bot token is not set. "
-            "Provide BOT_TOKEN or DOCKERHUB_TOKEN environment variable."
+            "Provide BOT_TOKEN or DOCKERHUB_TOKEN environment variable.\n"
+            "  - via .env file:  BOT_TOKEN=123456:ABC-DEF...\n"
+            "  - via docker-compose environment section\n"
+            "  - via shell:  export BOT_TOKEN=123456:ABC-DEF..."
+        )
+    if not _TOKEN_RE.match(token):
+        raise SystemExit(
+            f"FATAL: Bot token has invalid format: '{token[:6]}...'\n"
+            "Expected format: 1234567890:AABBCCdd-EEff (digits, colon, alphanumeric).\n"
+            "Get a valid token from @BotFather in Telegram."
         )
 
     await init_db()
 
     bot = Bot(
-        token=settings.bot_token,
+        token=token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     # NOTE: Use RedisStorage or SQLiteStorage in production to survive restarts.
